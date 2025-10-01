@@ -53,7 +53,7 @@ const ChatInput = ({ onSendMessage, isLoading, searchContext, setSearchContext }
             onChange={setSearchContext}
             cleanable={false}
             searchable={false}
-            // className="search-mode-dropdown"
+            className="search-mode-dropdown"
             renderValue={(value, item) => {
               return item ? item.label.replace('Search Mode: ', '') : value;
             }}
