@@ -98,6 +98,58 @@ async def azure_openai_complete(
         return locate_json_string_body_from_string(result)
     return result
 
+# ---------------------------
+# Direct OpenAI (non-Azure) support
+# ---------------------------
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type((RateLimitError, APIConnectionError, Timeout)),
+)
+async def openai_complete_if_cache(
+    model,
+    prompt,
+    system_prompt=None,
+    history_messages=[],
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    **kwargs,
+):
+    """Chat completion via OpenAI public API using AsyncOpenAI.
+
+    Reads OPENAI_API_KEY and OPENAI_API_BASE from environment unless explicitly overridden.
+    """
+    client = AsyncOpenAI(
+        api_key=api_key or os.getenv("OPENAI_API_KEY"),
+        base_url=base_url or os.getenv("OPENAI_API_BASE"),
+    )
+    kwargs.pop("hashing_kv", None)
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.extend(history_messages)
+    if prompt is not None:
+        messages.append({"role": "user", "content": prompt})
+
+    response = await client.chat.completions.create(model=model, messages=messages, **kwargs)
+    content = response.choices[0].message.content
+    return content
+
+async def openai_complete(
+    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+) -> str:
+    keyword_extraction = kwargs.pop("keyword_extraction", None)
+    result = await openai_complete_if_cache(
+        kwargs.pop("model", "gpt-4o"),
+        prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages,
+        **kwargs,
+    )
+    if keyword_extraction:  # TODO: use JSON API
+        return locate_json_string_body_from_string(result)
+    return result
+
 async def fetch_data(url, headers, data):
     async with aiohttp.ClientSession() as session:
         async with session.post(url, headers=headers, json=data) as response:
@@ -132,6 +184,27 @@ async def azure_openai_embedding(
     )
 
     response = await openai_async_client.embeddings.create(
+        model=model, input=texts, encoding_format="float"
+    )
+    return np.array([dp.embedding for dp in response.data])
+
+@wrap_embedding_func_with_attrs(embedding_dim=1536, max_token_size=8191)
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type((RateLimitError, APIConnectionError, Timeout)),
+)
+async def openai_embedding(
+    texts: list[str],
+    model: str = "text-embedding-3-small",
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+) -> np.ndarray:
+    client = AsyncOpenAI(
+        api_key=api_key or os.getenv("OPENAI_API_KEY"),
+        base_url=base_url or os.getenv("OPENAI_API_BASE"),
+    )
+    response = await client.embeddings.create(
         model=model, input=texts, encoding_format="float"
     )
     return np.array([dp.embedding for dp in response.data])
@@ -196,6 +269,52 @@ async def azure_openai_complete_stream(
     # you might need to collect the full result and then process it.
     async for token in azure_openai_complete_if_cache_stream(
         "gpt-4o",
+        prompt,
+        system_prompt=system_prompt,
+        history_messages=history_messages,
+        **kwargs,
+    ):
+        yield token
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_exponential(multiplier=1, min=4, max=10),
+    retry=retry_if_exception_type((RateLimitError, APIConnectionError, Timeout)),
+)
+async def openai_complete_if_cache_stream(
+    model,
+    prompt,
+    system_prompt=None,
+    history_messages=[],
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    **kwargs,
+):
+    client = AsyncOpenAI(
+        api_key=api_key or os.getenv("OPENAI_API_KEY"),
+        base_url=base_url or os.getenv("OPENAI_API_BASE"),
+    )
+    kwargs.pop("hashing_kv", None)
+    messages = []
+    if system_prompt:
+        messages.append({"role": "system", "content": system_prompt})
+    messages.extend(history_messages)
+    if prompt is not None:
+        messages.append({"role": "user", "content": prompt})
+
+    kwargs["stream"] = True
+    async for response in client.chat.completions.create(
+        model=model, messages=messages, **kwargs
+    ):
+        delta = response.choices[0].delta
+        if "content" in delta:
+            yield delta["content"]
+
+async def openai_complete_stream(
+    prompt, system_prompt=None, history_messages=[], keyword_extraction=False, **kwargs
+):
+    async for token in openai_complete_if_cache_stream(
+        kwargs.pop("model", "gpt-4o"),
         prompt,
         system_prompt=system_prompt,
         history_messages=history_messages,

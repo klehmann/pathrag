@@ -10,6 +10,8 @@ from typing import Type, cast
 from .llm import (
     azure_openai_complete,
     azure_openai_embedding,
+    openai_complete,
+    openai_embedding,
 )
 from .operate import (
     chunking_by_token_size,
@@ -186,6 +188,28 @@ class PathRAG:
         if not os.path.exists(self.working_dir):
             logger.info(f"Creating working directory {self.working_dir}")
             os.makedirs(self.working_dir)
+
+        # Auto-select provider based on environment if user didn't override
+        try:
+            azure_key = os.getenv("AZURE_OPENAI_API_KEY")
+            openai_key = os.getenv("OPENAI_API_KEY")
+            # Only switch if user didn't pass custom callables (i.e., using defaults)
+            if (
+                openai_key
+                and not azure_key
+                and self.embedding_func == azure_openai_embedding
+            ):
+                logger.info("Switching to OpenAI public API based on environment vars.")
+                self.embedding_func = openai_embedding
+            if (
+                openai_key
+                and not azure_key
+                and self.llm_model_func == azure_openai_complete
+            ):
+                self.llm_model_func = openai_complete
+        except Exception as _:
+            # Non-fatal; keep defaults
+            pass
 
         self.llm_response_cache = (
             self.key_string_value_json_storage_cls(
