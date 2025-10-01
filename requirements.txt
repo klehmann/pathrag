@@ -24,8 +24,9 @@ sqlalchemy
 tenacity
 networkx
 python-jose
-passlib
-bcrypt
+passlib>=1.7.4
+email-validator
+bcrypt==4.0.1
 pyjwt
 aiosqlite
 matplotlib
